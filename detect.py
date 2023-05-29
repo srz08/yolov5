@@ -114,6 +114,11 @@ def run(
     # Run inference
     model.warmup(imgsz=(1 if pt or model.triton else bs, 3, *imgsz))  # warmup
     seen, windows, dt = 0, [], (Profile(), Profile(), Profile())
+    big_boxes = []
+    big_scores = [] 
+    big_labels = [] 
+    big_images = []
+    big_det = []
     for path, im, im0s, vid_cap, s in dataset:
         with dt[0]:
             im = torch.from_numpy(im).to(model.device)
@@ -130,7 +135,44 @@ def run(
         # NMS
         with dt[2]:
             pred = non_max_suppression(pred, conf_thres, iou_thres, classes, agnostic_nms, max_det=max_det)
+        # print(pred)
+        # h, w = im0s.shape[:2]  # orig hw
+        # #get boxes from pred
+        # boxes = []
+        # for i, det in enumerate(pred):  # per image
+        #     if det is not None and len(det):
+        #         # print(det[:, 0], w)
+        #         # det[:, 0] = det[:, 0]/h
+        #         # # print(det[:, 0])
+        #         # det[:, 1] = det[:, 1]/w
+        #         # det[:, 2] = det[:, 2]/h
+        #         # det[:, 3] = det[:, 3]/w
+        #         # print(det[:, :4].cpu().numpy())
+        #         boxes.append(det[:, :4].cpu().numpy().copy())
+        #         # print(det[:, :4].cpu().numpy())
+        #         # print(boxes)
+        #     else:
+        #         boxes.append([])
+        # big_boxes.append(boxes)
+        # print(big_boxes)
+        scores = []
+        for i, det in enumerate(pred):  # per image
+            if det is not None and len(det):
+                scores.append(det[:, 4].cpu().numpy())
+            else:
+                scores.append([])
+        big_scores.append(scores)
+        labels = []
+        for i, det in enumerate(pred):  # per image
+            if det is not None and len(det):
+                labels.append(det[:, -1].cpu().numpy())
+            else:
+                labels.append([])
 
+        big_labels.append(labels)
+        num_detections = len(big_labels[0])
+        big_det.append(num_detections)
+        
         # Second-stage classifier (optional)
         # pred = utils.general.apply_classifier(pred, classifier_model, im, im0s)
 
@@ -161,6 +203,7 @@ def run(
 
                 # Write results
                 for *xyxy, conf, cls in reversed(det):
+                    big_boxes.append(xyxy)
                     if save_txt:  # Write to file
                         xywh = (xyxy2xywh(torch.tensor(xyxy).view(1, 4)) / gn).view(-1).tolist()  # normalized xywh
                         line = (cls, *xywh, conf) if save_conf else (cls, *xywh)  # label format
@@ -202,6 +245,8 @@ def run(
                         save_path = str(Path(save_path).with_suffix('.mp4'))  # force *.mp4 suffix on results videos
                         vid_writer[i] = cv2.VideoWriter(save_path, cv2.VideoWriter_fourcc(*'mp4v'), fps, (w, h))
                     vid_writer[i].write(im0)
+                big_images.append(im0)
+                
 
         # Print time (inference-only)
         LOGGER.info(f"{s}{'' if len(det) else '(no detections), '}{dt[1].dt * 1E3:.1f}ms")
@@ -214,6 +259,9 @@ def run(
         LOGGER.info(f"Results saved to {colorstr('bold', save_dir)}{s}")
     if update:
         strip_optimizer(weights[0])  # update model (to fix SourceChangeWarning)
+    # print(big_boxes)
+    # print(big_boxes, big_labels)
+    return big_boxes, big_scores, big_labels, big_det
 
 
 def parse_opt():
